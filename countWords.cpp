@@ -171,16 +171,12 @@ void process_chunk(ThreadSafeQueue& queue, GlobalWordCount& global_counts,
             temp_word = word;
             size_t start = 0;
             size_t end = word.size();
-            std::unordered_set<string> valid_words = {"dios", "hasta", "senor", "entonces"};
-
+            
             while (start < end && ispunct(static_cast<unsigned char>(word[start]))) {
                 start++;
             }
             while (end > start && ispunct(static_cast<unsigned char>(word[end - 1]))) {
                 end--;
-            }
-            if (!valid_words.count(word)) {
-                cout<<"Palabra no válida: \"" << temp_word << "\"" << endl;
             }
         
             if (start < end) {
