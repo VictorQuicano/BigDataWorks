@@ -11,11 +11,11 @@
 using namespace std;
 
 const size_t BLOCK_SIZE = 1024 * 1024; // 1 MB
-size_t FILE_SIZE_GB = 20;
+size_t FILE_SIZE_GB = 21;
 const size_t FILE_SIZE_BYTES = FILE_SIZE_GB * size_t(1024) * 1024 * 1024;
 
-string input_file = "inputs/most-common-spanish-words-v5.txt";
-string output_file = "archivo_20GB.txt";
+string input_file = "../00_Inputs/most-common-spanish-words-v5.txt";
+//string output_file = "archivo_20GB.txt";
 string output_dir = "outputs_test";    
 
 string generarTextoAleatorio(vector<string>& palabras, size_t tamanoBytes, mt19937& gen) {
@@ -61,42 +61,6 @@ void escribirParte(int thread_id, size_t bytes_por_thread, vector<string>& palab
 
     archivo.close();
 }
-void unirArchivos(int num_threads, const std::string& archivo_final) {
-    const size_t BUFFER_SIZE = 8 * 1024 * 1024; // 8 MB
-    std::vector<char> buffer(BUFFER_SIZE);
-
-    std::ofstream salida(archivo_final, std::ios::out | std::ios::binary);
-    if (!salida) {
-        std::cerr << "No se pudo crear el archivo final\n";
-        return;
-    }
-
-    for (int i = 0; i < num_threads; ++i) {
-        std::string nombre_parte = output_dir + "/parts/parte_" + std::to_string(i) + ".txt";
-        std::ifstream entrada(nombre_parte, std::ios::in | std::ios::binary);
-        if (!entrada) {
-            std::cerr << "No se pudo abrir " << nombre_parte << " para unir\n";
-            continue;
-        }
-
-        while (entrada) {
-            entrada.read(buffer.data(), BUFFER_SIZE);
-            std::streamsize bytes_leidos = entrada.gcount();
-            if (bytes_leidos > 0) {
-                salida.write(buffer.data(), bytes_leidos);
-            }
-        }
-
-        entrada.close();
-
-        // Agregar espacio solo si no es el último archivo
-        if (i < num_threads - 1) {
-            salida << ' ';
-        }
-    }
-
-    salida.close();
-}
 
 
 int main(int argc, char* argv[]) {
@@ -124,11 +88,7 @@ int main(int argc, char* argv[]) {
         hilo.join();
     }
 
-    std::cout << "Unificando partes...\n";
-    string output_name = output_dir + "/" + output_file;
-    unirArchivos(num_threads, output_name);
-
-    std::cout << "¡Archivo completo generado!\n";
+    std::cout << "¡Archivos generados!\n";
     return 0;
     
 }

@@ -57,40 +57,17 @@ public:
     }
 };
 
-// Thread-safe map merging
-class GlobalWordCount {
+class GlobalInvertedIndex {
 private:
-    unordered_map<string, uint64_t> counts;
+    unordered_map<string, unordered_set<string>> index;
     std::mutex mutex;
-    atomic<uint64_t> total_words{0};
 
 public:
-    void merge(const unordered_map<string, uint64_t>& local_counts, uint64_t local_total) {
+    void merge(const unordered_map<string, unordered_set<string>>& local_index) {
         unique_lock<std::mutex> lock(mutex);
-        for (const auto& [word, count] : local_counts) {
-            counts[word] += count;
+        for (const auto& [word, doc_ids] : local_index) {
+            index[word].insert(doc_ids.begin(), doc_ids.end());
         }
-        total_words += local_total;
-    }
-
-    void merge_from_file(const string& filename) {
-        ifstream file(filename);
-        if (!file.is_open()) {
-            cerr << "Failed to open intermediate file: " << filename << endl;
-            return;
-        }
-
-        string line;
-        while (getline(file, line)) {
-            size_t space_pos = line.rfind(' ');
-            if (space_pos != string::npos) {
-                string word = line.substr(0, space_pos);
-                uint64_t count = stoull(line.substr(space_pos + 1));
-                counts[word] += count;
-                total_words += count;
-            }
-        }
-        file.close();
     }
 
     void write_to_file(const string& filename) {
@@ -100,103 +77,52 @@ public:
             return;
         }
 
-        // Convert to vector for sorting
-        vector<pair<string, uint64_t>> sorted_counts(counts.begin(), counts.end());
-        sort(sorted_counts.begin(), sorted_counts.end(), 
-            [](const auto& a, const auto& b) { return a.second > b.second; });
-
-        for (const auto& [word, count] : sorted_counts) {
-            file << word << " " << count << "\n";
-        }
-        file.close();
-    }
-
-    void write_intermediate(const string& filename, size_t memory_limit) {
-        unique_lock<std::mutex> lock(mutex);
-        
-        if (counts.size() <= memory_limit) {
-            return;
-        }
-
-        ofstream file(filename, ios::app);
-        if (!file.is_open()) {
-            cerr << "Failed to open intermediate file: " << filename << endl;
-            return;
-        }
-
-        vector<pair<string, uint64_t>> sorted_counts(counts.begin(), counts.end());
-        sort(sorted_counts.begin(), sorted_counts.end(), 
-            [](const auto& a, const auto& b) { return a.second > b.second; });
-
-        for (const auto& [word, count] : sorted_counts) {
-            file << word << " " << count << "\n";
-        }
-        file.close();
-
-        if (memory_limit > 0 && sorted_counts.size() > memory_limit) {
-            unordered_map<string, uint64_t> new_counts;
-            for (size_t i = 0; i < memory_limit / 2; ++i) {
-                if (i >= sorted_counts.size()) break;
-                new_counts[sorted_counts[i].first] = sorted_counts[i].second;
+        for (const auto& [word, docs] : index) {
+            file << word;
+            for (const auto& doc : docs) {
+                file << " " << doc;
             }
-            counts = move(new_counts);
+            file << "\n";
         }
+
+        file.close();
     }
 
-    uint64_t get_total_words() const {
-        return total_words;
-    }
-
-    size_t get_unique_words() const {
-        return counts.size();
+    size_t get_total_words() const {
+        return index.size();
     }
 };
+    
 
-void process_chunk(ThreadSafeQueue& queue, GlobalWordCount& global_counts, 
-                  const string& temp_file, size_t memory_limit, atomic<bool>& stop_flag) {
+void process_chunk(ThreadSafeQueue& queue, GlobalInvertedIndex& global_index, 
+    atomic<bool>& stop_flag) {
     pair<string, size_t> item;
     
     while (!stop_flag && queue.pop(item)) {
         const string& chunk = item.first;
-        size_t chunk_id = item.second;
-        
-        unordered_map<string, uint64_t> local_counts;
-        uint64_t local_total = 0;
-        
+        string doc_id = "doc_" + to_string(item.second); // Usa esto como ID
+        unordered_map<string, unordered_set<string>> local_index;
         istringstream stream(chunk);
         string word;
-        
-        string temp_word;
         while (stream >> word) {
-            temp_word = word;
-            size_t start = 0;
-            size_t end = word.size();
+            size_t start = 0, end = word.size();
+            while (start < end && ispunct(static_cast<unsigned char>(word[start]))) ++start;
             
-            while (start < end && ispunct(static_cast<unsigned char>(word[start]))) {
-                start++;
-            }
-            while (end > start && ispunct(static_cast<unsigned char>(word[end - 1]))) {
-                end--;
-            }
-        
+            while (end > start && ispunct(static_cast<unsigned char>(word[end - 1]))) --end;
             if (start < end) {
                 string clean_word = word.substr(start, end - start);
-            
-                // Convertir a minúsculas (opcional, pero recomendable)
                 transform(clean_word.begin(), clean_word.end(), clean_word.begin(), ::tolower);
-            
-                // Agregar al contador
-                local_counts[clean_word]++;
-                local_total++;
+                local_index[clean_word].insert(doc_id);
             }
         }
         
-        global_counts.merge(local_counts, local_total);
-        
-        global_counts.write_intermediate(temp_file, memory_limit);
+        global_index.merge(local_index);
     }
 }
 
+
+
+// HELPERS OF OUTPUT
 string format_bytes(uint64_t bytes) {
     const char* suffixes[] = {"B", "KB", "MB", "GB", "TB"};
     int suffix_index = 0;
@@ -270,19 +196,16 @@ int main(int argc, char* argv[]) {
     
     auto start_time = chrono::high_resolution_clock::now();
     
-    // Setup thread-safe structures
     ThreadSafeQueue chunk_queue;
     GlobalWordCount global_counts;
     atomic<bool> stop_flag(false);
     
-    // Start worker threads
     vector<thread> threads;
     for (size_t i = 0; i < num_threads; ++i) {
         threads.emplace_back(process_chunk, ref(chunk_queue), ref(global_counts), 
                              ref(temp_file), memory_limit, ref(stop_flag));
     }
     
-    // Read file in chunks and queue them for processing
     ifstream file(input_file, ios::binary);
     if (!file.is_open()) {
         cerr << "Failed to open input file: " << input_file << endl;
@@ -301,7 +224,6 @@ int main(int argc, char* argv[]) {
     size_t chunk_id = 0;
     string leftover;
     
-    // Progress reporting thread
     atomic<size_t> progress_bytes(0);
     thread progress_thread([&]() {
         while (!stop_flag) {
